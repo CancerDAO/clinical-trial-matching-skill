@@ -30,9 +30,9 @@ clinical-trial-matching-skill/
 │   └── setup-chictr-mcp.sh    # One-command ChiCTR MCP installer
 └── repo/
     ├── README.md               # Notes on the (now-removed) NCBI lineage
-    ├── trialgpt_retrieval/
+    ├── retrieval/
     │   └── dual_source_search.py      # Parallel NCT + ChiCTR search (stdlib only)
-    └── trialgpt_report/
+    └── report/
         └── template.html              # 8-section HTML report
 ```
 
@@ -77,7 +77,7 @@ will trigger it on `description` match. No slash command is needed.
 
 ### 2. (Skipped — no Python deps to install)
 
-The dual-source retriever (`repo/trialgpt_retrieval/dual_source_search.py`)
+The dual-source retriever (`repo/retrieval/dual_source_search.py`)
 uses only Python stdlib (`urllib`, `concurrent.futures`). All LLM reasoning
 — keyword generation, criterion-level eligibility evaluation, ranking,
 and report writing — is performed by Claude in the conversation, not by a

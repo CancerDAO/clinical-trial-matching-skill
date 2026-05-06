@@ -5,9 +5,9 @@ project root.
 
 ```
 repo/
-├── trialgpt_retrieval/
+├── retrieval/
 │   └── dual_source_search.py   # Parallel NCT + ChiCTR HTTP retriever (stdlib only)
-└── trialgpt_report/
+└── report/
     └── template.html           # 8-section self-contained HTML report
 ```
 
@@ -22,9 +22,10 @@ repo/
   step.
 - **NCBI lineage.** Earlier releases vendored the
   [NCBI TrialGPT](https://github.com/ncbi-nlp/TrialGPT) Python package
-  (`trialgpt_matching/`, `trialgpt_ranking/`, and parts of
-  `trialgpt_retrieval/`). Those modules called Azure OpenAI directly
-  and were never invoked by this skill's workflow, so they have been
-  removed. The keyword strategy and criterion-level evaluation pattern
-  are conceptually inspired by the NCBI paper — see `../NOTICE.md` for
-  citation.
+  under `trialgpt_matching/`, `trialgpt_ranking/`, and parts of a
+  former `trialgpt_retrieval/` directory. Those modules called Azure
+  OpenAI directly and were never invoked by this skill's workflow, so
+  they have been removed; the surviving retrieval code (now in
+  `retrieval/`) is CancerDAO-original. The keyword strategy and
+  criterion-level evaluation pattern are conceptually inspired by the
+  NCBI paper — see `../NOTICE.md` for citation.

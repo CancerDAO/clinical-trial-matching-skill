@@ -51,7 +51,7 @@ Enhanced with **dual-source search** to cover both ClinicalTrials.gov and ChiCTR
 
 最终输出为一份 **独立的 HTML 文件**，无外部依赖，可直接在浏览器中打开查看。
 
-HTML 报告模板位于: `repo/trialgpt_report/template.html`
+HTML 报告模板位于: `repo/report/template.html`
 
 ### HTML 报告结构 (8 个板块)
 
@@ -288,7 +288,7 @@ Step 4: 匹配分析 + 逐条标准评估 + 分级 [LLM]
     │
 Step 5: 生成 HTML 报告 [LLM]
     │
-    ├─ 读取模板: repo/trialgpt_report/template.html
+    ├─ 读取模板: repo/report/template.html
     ├─ 用匹配分析结果填充 7 个板块:
     │   ├─ 患者画像摘要 (grid 卡片 + mol-tag)
     │   ├─ 治疗决策史 (timeline)
@@ -346,17 +346,17 @@ Step 6: 报告校验 [脚本 + LLM] ⚠️ 必须执行
 
 ### 脚本文件
 
-检索脚本位于: `repo/trialgpt_retrieval/dual_source_search.py`
+检索脚本位于: `repo/retrieval/dual_source_search.py`
 
 ```bash
 # 独立运行 (LLM 先生成 search_plan.json)
-python repo/trialgpt_retrieval/dual_source_search.py \
+python repo/retrieval/dual_source_search.py \
   --plan search_plan.json \
   --out results.json \
   --max-per-query 10
 
 # 或作为模块被 LLM agent 调用
-from trialgpt_retrieval.dual_source_search import execute_search_plan, generate_search_plan_prompt
+from retrieval.dual_source_search import execute_search_plan, generate_search_plan_prompt
 results = execute_search_plan(plan_dict, chictr_results=chictr_data)
 ```
 

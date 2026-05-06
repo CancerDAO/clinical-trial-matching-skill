@@ -9,11 +9,14 @@ acknowledge their authors.
 - License: U.S. Government Work / Public Domain
 - Scope: earlier versions of this repository vendored NCBI's Python
   package under `repo/trialgpt_matching/`, `repo/trialgpt_ranking/`,
-  and parts of `repo/trialgpt_retrieval/`. Those modules called Azure
-  OpenAI directly and were never invoked by this skill's workflow (Claude
-  performs all LLM reasoning in the conversation), so they have been
-  removed. The 8-dimension keyword strategy and criterion-level
-  evaluation pattern are conceptually inspired by the NCBI paper.
+  and `repo/trialgpt_retrieval/keyword_generation.py` plus
+  `hybrid_fusion_retrieval.py`. Those modules called Azure OpenAI
+  directly and were never invoked by this skill's workflow (Claude
+  performs all LLM reasoning in the conversation), so the directories
+  and files were removed; the remaining retrieval code (now under
+  `repo/retrieval/`) is CancerDAO-original. The 8-dimension keyword
+  strategy and criterion-level evaluation pattern are conceptually
+  inspired by the NCBI paper.
 - Suggested citation if you build on this work:
 
   > Qiao Jin, Zifeng Wang, Charalampos S. Floudas, Fangyuan Chen, Changlin
@@ -33,9 +36,9 @@ acknowledge their authors.
 The following additions are contributed by CancerDAO and released under the
 MIT license (see `LICENSE`):
 
-- Dual-source search orchestration (`repo/trialgpt_retrieval/dual_source_search.py`)
+- Dual-source search orchestration (`repo/retrieval/dual_source_search.py`)
   — pure stdlib, no LLM client, no external Python dependencies.
-- HTML report template (`repo/trialgpt_report/template.html`).
+- HTML report template (`repo/report/template.html`).
 - The `SKILL.md` skill definition: 8-dimension keyword strategy,
   criterion-level chain-of-thought evaluation, hard grading rules (R1–R5),
   three-stage verification pipeline, compliance guardrails, and the Chinese
