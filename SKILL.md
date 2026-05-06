@@ -13,8 +13,8 @@ measurable_outcome: Produce ≥5 matched trials (when available) with rationale 
 license: MIT
 metadata:
   author: CancerDAO
-  upstream: NCBI TrialGPT (ncbi-nlp/TrialGPT)
-  version: "1.4.0"
+  inspired_by: NCBI TrialGPT (ncbi-nlp/TrialGPT)
+  version: "1.5.0"
 compatibility:
   - system: Python 3.9+
   - external: chictr-mcp-server (required for ChiCTR search)

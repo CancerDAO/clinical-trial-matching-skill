@@ -55,10 +55,18 @@ fi
 green "  ✓ $CLAUDE_JSON is readable"
 
 bold "→ Step 3/4  Merging mcpServers.chictr…"
-node - "$CLAUDE_JSON" <<'NODE_EOF'
+# Crash-safe write: backup → write to tempfile → atomic rename. If anything
+# fails mid-write we never leave $CLAUDE_JSON in a half-written state.
+TS=$(date +%Y%m%d-%H%M%S)
+BACKUP="${CLAUDE_JSON}.backup-${TS}"
+cp "$CLAUDE_JSON" "$BACKUP"
+TMP_OUT=$(mktemp "${CLAUDE_JSON}.tmp.XXXXXX")
+trap 'rm -f "$TMP_OUT"' EXIT
+
+VERDICT=$(node - "$CLAUDE_JSON" "$TMP_OUT" <<'NODE_EOF'
 const fs = require('fs');
-const path = process.argv[2];
-const cfg = JSON.parse(fs.readFileSync(path, 'utf8'));
+const [src, dst] = process.argv.slice(2);
+const cfg = JSON.parse(fs.readFileSync(src, 'utf8'));
 cfg.mcpServers = cfg.mcpServers || {};
 const existing = cfg.mcpServers.chictr;
 const desired = { command: 'npx', args: ['-y', 'chictr-mcp-server'] };
@@ -66,21 +74,68 @@ const same = existing
   && existing.command === desired.command
   && JSON.stringify(existing.args) === JSON.stringify(desired.args);
 if (same) {
-  process.stdout.write('UNCHANGED\n');
+  process.stdout.write('UNCHANGED');
 } else {
   cfg.mcpServers.chictr = desired;
-  fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + '\n');
-  process.stdout.write(existing ? 'UPDATED\n' : 'ADDED\n');
+  fs.writeFileSync(dst, JSON.stringify(cfg, null, 2) + '\n');
+  process.stdout.write(existing ? 'UPDATED' : 'ADDED');
 }
 NODE_EOF
+)
 
-bold "→ Step 4/4  Verifying npx can fetch $CHICTR_PKG…"
-if npx -y "$CHICTR_PKG" --help >/dev/null 2>&1; then
-  green "  ✓ npx -y $CHICTR_PKG resolved successfully"
+case "$VERDICT" in
+  UNCHANGED)
+    green "  ✓ chictr already registered; no changes."
+    rm -f "$BACKUP"  # backup unnecessary when nothing changed
+    ;;
+  ADDED|UPDATED)
+    mv "$TMP_OUT" "$CLAUDE_JSON"  # atomic rename on POSIX
+    green "  ✓ $VERDICT mcpServers.chictr (backup: $BACKUP)"
+    ;;
+  *)
+    red "  ✗ Unexpected verdict from JSON merge: '$VERDICT'"
+    red "    Backup preserved at: $BACKUP"
+    exit 4
+    ;;
+esac
+
+bold "→ Step 4/4  Verifying npx can fetch $CHICTR_PKG (60s timeout)…"
+NPX_TIMEOUT="${CHICTR_NPX_TIMEOUT:-60}"
+
+# Portable timeout: prefer GNU coreutils 'timeout' (Linux), then 'gtimeout'
+# (macOS w/ brew coreutils), then fall back to perl's alarm (always present
+# on macOS and most Linux distros).
+run_with_timeout() {
+  local secs="$1"; shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${secs}s" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "${secs}s" "$@"
+  elif command -v perl >/dev/null 2>&1; then
+    # perl returns 142 (128 + SIGALRM) on timeout; we normalize to 124 so the
+    # caller can treat it the same as GNU timeout's exit code.
+    perl -e 'alarm shift; exec @ARGV; exit 127' "$secs" "$@"
+    local rc=$?
+    [[ "$rc" -eq 142 ]] && return 124
+    return $rc
+  else
+    "$@"  # no timeout available — last resort
+  fi
+}
+
+if run_with_timeout "$NPX_TIMEOUT" npx -y "$CHICTR_PKG" --help >/dev/null 2>&1; then
+  green "  ✓ npx -y $CHICTR_PKG resolved within ${NPX_TIMEOUT}s"
 else
-  yellow "  ! Could not invoke '$CHICTR_PKG --help'. This is OK if the"
-  yellow "    package itself doesn't accept --help; npm registry reachability"
-  yellow "    will be the actual smoke test on first use."
+  rc=$?
+  if [[ "$rc" -eq 124 ]]; then
+    yellow "  ! npx fetch hit the ${NPX_TIMEOUT}s timeout — slow network or"
+    yellow "    corporate proxy? First real ChiCTR query inside Claude Code"
+    yellow "    will be the actual smoke test."
+  else
+    yellow "  ! '$CHICTR_PKG --help' returned non-zero (rc=$rc). OK if the"
+    yellow "    package doesn't accept --help; first real query is the"
+    yellow "    actual smoke test."
+  fi
 fi
 
 echo
