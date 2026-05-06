@@ -468,10 +468,6 @@ bash scripts/setup-chictr-mcp.sh
 - **ECOG 默认符合**: 除非试验明确要求 ECOG=0 且有理由认为患者不满足，否则不标注为风险
 - **对外文档不含评分、不使用"推荐"、不含优先级排序**
 
-## 与 trial-eligibility-agent 的协作
-
-Matched list + structured criteria → 传递给 `trial-eligibility-agent` 做逐条入组审核
-
 ## References
 
 - TrialGPT: https://github.com/ncbi-nlp/TrialGPT
