@@ -1,9 +1,8 @@
 __pycache__/
-*.py[cod]
-*.egg-info/
-.venv/
-venv/
-.env
+*.pyc
 .DS_Store
-repo/dataset/
-results/*.json
+.pytest_cache/
+.venv/
+*.egg-info/
+*.log
+node_modules/

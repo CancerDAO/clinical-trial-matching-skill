@@ -1,185 +1,216 @@
-# Clinical Trial Matching Skill
+# Clinical Trial Matching Skill (v2)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
-A Claude Code / Anthropic Agent **Skill** for matching oncology (and other)
-patients to clinical trials with **dual-source retrieval** across
-[ClinicalTrials.gov](https://clinicaltrials.gov) and
-[ChiCTR](https://www.chictr.org.cn) (中国临床试验注册中心).
+A Claude Code / Anthropic Agent **Skill** for matching oncology patients (especially Chinese patients) to clinical trials with **dual-source retrieval** (ClinicalTrials.gov + ChiCTR) and **LLM-driven clinical reasoning**.
 
-Built on top of [NCBI TrialGPT](https://github.com/ncbi-nlp/TrialGPT) and
-extended by [CancerDAO](https://github.com/CancerDAO) with a Chinese
-clinical workflow, a criterion-level chain-of-thought evaluator, hard
-grading rules, a three-stage verification pipeline, and a self-contained
-HTML report.
-
-> ⚠️ **This tool provides information matching only. It does not constitute
-> medical advice or treatment recommendations.** All enrollment decisions
-> must be reviewed by a qualified clinical research team.
+> ⚠️ **This tool provides information matching only. It does not constitute medical advice or treatment recommendations.** All enrollment decisions must be reviewed by a qualified clinical research team.
 
 ---
 
-## What's in this repo
+## What's new in v2
+
+v2 is a ground-up architecture refactor. v1.7.x packed clinical knowledge into Python lookup tables (`risk_taxonomy.json`, `efficacy_database.json`, `soc_benchmarks.json`, regex matchers in `gating.py`). That approach **could not generalize** — adding a cancer type or fixing a mechanism×cancer mismatch required code changes, and the data tables were never complete enough.
+
+**v2 split**: keep Python for *mechanism* (deterministic things), move *knowledge* into LLM subskills.
+
+| Layer | v1.7.x | v2 |
+|---|---|---|
+| Retrieval (parallel HTTP, dedup) | Python | **Python (kept)** |
+| NCT verification (live API) | Python | **Python (kept)** |
+| 5-dim feasibility scoring | Python | **Python (kept)** |
+| HTML render (template fill) | Python | **Python (kept)** |
+| Per-trial gating + R1-R5 | `scoring/gating.py` (regex) | `trial-gater` LLM subskill |
+| Risk narratives (mechanism × cancer) | `risk_taxonomy.json` lookup | `trial-risk-annotator` LLM subskill |
+| Efficacy + SoC comparison | `efficacy_database.json` + `soc_benchmarks.json` | `trial-efficacy-contextualizer` LLM subskill |
+| Top-N decision paths + GoC trigger | `synthesis/decision_paths.py` + `goals_of_care.py` | `decision-synthesizer` LLM subskill |
+
+### Bugs v2 was built to fix
+
+A v1.7.1 test run on a real KRAS G12C mCRC patient (PT-17CE02BC33) surfaced these failures:
+
+1. PDAC-specific risk text leaked onto a CRC report ("EGFR antibody combination (PDAC)" risk attached to a CRC patient on Calderasib trial)
+2. KRAS G12D drug-class baseline (ORR 30%, mPFS 4.5mo) applied to a KRAS G12C patient as their #3 decision path
+3. CRC SoC database had only 1 entry (BRAF V600E 1L) → all CRC patients got "vs SoC: not available"
+4. R1 hard rule (prior same-class drug → demote) silently failed for patients with prior anti-PD-1 / anti-VEGF
+5. Goals-of-Care trigger didn't fire for a 69yo IV CRC patient on L3 with severe CV comorbidity (used `treatment_lines_completed=2` instead of effective L3)
+6. Pipeline `cd` bug in `run_v160_pipeline.sh` broke relative `--patient` path
+7. `decision_report.json` had `patient_summary={}` and `feasibility_score=None` despite stdout printing correct values
+
+v2 architecture prevents these by design:
+- All risk narratives must declare `applies_because: (mechanism × cancer × patient)` — schema enforces it
+- All efficacy claims must declare `evidence_source.tier` and `applies_because` — class baselines must match patient's mutation
+- SoC comparison is generated from per-cancer rule files (`rules/soc-{cancer}-by-line.md`) — no hardcoded JSON gap
+- R1-R5 are LLM judgments with explicit drug-class reference, not regex
+- GoC trigger uses `effective_line = treatment_lines_completed + (1 if current_therapy_ongoing else 0)`
+
+---
+
+## Repository structure
+
+Following the [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills) convention:
 
 ```
 clinical-trial-matching-skill/
-├── SKILL.md                    # The skill definition (drop into ~/.claude/skills/)
-├── LICENSE                     # MIT
-├── NOTICE.md                   # Attribution
-├── scripts/
-│   └── setup-chictr-mcp.sh    # One-command ChiCTR MCP installer
-└── repo/
-    ├── README.md               # Notes on the (now-removed) NCBI lineage
-    ├── retrieval/
-    │   └── dual_source_search.py      # Parallel NCT + ChiCTR search (stdlib only)
-    └── report/
-        └── template.html              # 8-section HTML report
+├── README.md                                  # this file
+├── AGENTS.md                                  # guidance for AI agents working on this codebase
+├── CHANGELOG.md
+├── LICENSE                                    # MIT
+├── NOTICE.md                                  # attribution to NCBI TrialGPT
+└── skills/
+    ├── clinical-trial-matching/               # PARENT orchestrator skill
+    │   ├── SKILL.md
+    │   ├── data/
+    │   │   └── clinical_ontology.json         # cancer aliases + chemo regimens + therapy classes (NO efficacy/risk/SoC)
+    │   ├── scripts/                           # mechanism (deterministic Python)
+    │   │   ├── retrieval/
+    │   │   │   ├── dual_source_search.py
+    │   │   │   └── chictr_resilient.py
+    │   │   ├── verification/nct_verifier.py
+    │   │   ├── scoring/feasibility.py         # 5-dim deterministic
+    │   │   ├── render/
+    │   │   │   ├── html_renderer.py
+    │   │   │   └── template.html
+    │   │   └── setup-chictr-mcp.sh
+    │   └── examples/
+    │       ├── PT-17CE02BC33-patient.json
+    │       └── PT-17CE02BC33-search-plan.json
+    ├── trial-gater/                           # SUBSKILL: criterion eligibility + R1-R5
+    │   ├── SKILL.md
+    │   └── rules/
+    │       ├── R1-prior-same-class-drug.md
+    │       ├── R2-treatment-line-mismatch.md
+    │       ├── R3-indication-scope.md
+    │       ├── R4-organ-function-borderline.md
+    │       ├── R5-missing-critical-fields.md
+    │       └── output-gating-verdict-schema.md
+    ├── trial-risk-annotator/                  # SUBSKILL: per (mechanism × cancer) risk narratives
+    │   ├── SKILL.md
+    │   └── rules/
+    │       ├── risk-kras-g12c-by-cancer.md
+    │       ├── risk-kras-g12d-class.md
+    │       ├── risk-pan-ras-class.md
+    │       ├── risk-cell-therapy-solid-tumor.md
+    │       ├── risk-bispecific-mss-crc.md
+    │       ├── risk-phase-1-dose-escalation.md
+    │       └── output-risk-annotation-schema.md
+    ├── trial-efficacy-contextualizer/         # SUBSKILL: efficacy + per-line SoC
+    │   ├── SKILL.md
+    │   └── rules/
+    │       ├── soc-crc-by-line.md
+    │       ├── soc-nsclc-by-line.md
+    │       ├── soc-pdac-by-line.md
+    │       └── output-efficacy-context-schema.md
+    └── decision-synthesizer/                  # SUBSKILL: Top-N + GoC + diversity
+        ├── SKILL.md
+        └── rules/
+            ├── synthesis-diversity-bucketing.md
+            ├── synthesis-goals-of-care-trigger.md
+            └── output-decision-report-schema.md
 ```
-
-All LLM reasoning (keyword generation, criterion-level evaluation,
-ranking, report writing) is performed by Claude in the conversation —
-the only Python in this repo is the parallel HTTP retriever, which uses
-nothing but the standard library.
-
----
-
-## Key enhancements over upstream TrialGPT
-
-| | Upstream TrialGPT | This skill |
-|---|---|---|
-| **Data sources** | ClinicalTrials.gov | ClinicalTrials.gov **+ ChiCTR** |
-| **Keyword strategy** | Single LLM pass | **8-dimension strategy**: disease-specific, generalized ("solid tumor"), cell-therapy-unconstrained, combo targets, pathway, Chinese keywords, **exhaustive drug-name enumeration**, **resistance-pathway keywords** |
-| **Eligibility check** | Criterion-level matching | Same + **hard grading rules R1–R5** to prevent "high match" inflation (prior same-class drug, line-of-therapy mismatch, indication scope, organ-function borderline, ≥2 missing critical fields) |
-| **Verification** | — | **3-stage post-hoc verification**: (a) NCT/ChiCTR ID validation via official APIs, (b) completeness review against the search plan, (c) patient-fit re-check |
-| **Output** | JSON | **Self-contained HTML report** (8 sections: patient profile, treatment timeline, matching summary, ranked candidates, criterion-by-criterion assessment, excluded directions, referral centers, information gaps + action items) |
-| **Compliance** | — | No scores, no "recommend", no priority ranking in patient-facing output |
 
 ---
 
 ## Installation
 
-### 1. Install the skill
+### Option A — install all 5 skills via `npx skills` (recommended)
 
-Drop the skill into your Claude Code skills directory:
+```bash
+npx skills add CancerDAO/clinical-trial-matching-skill --skill clinical-trial-matching --skill trial-gater --skill trial-risk-annotator --skill trial-efficacy-contextualizer --skill decision-synthesizer
+```
+
+Or install all skills in this repo:
+
+```bash
+npx skills add CancerDAO/clinical-trial-matching-skill --skill '*'
+```
+
+### Option B — manual install
 
 ```bash
 git clone https://github.com/CancerDAO/clinical-trial-matching-skill.git
-mkdir -p ~/.claude/skills/clinical-trial-matching-skill
-cp -r clinical-trial-matching-skill/SKILL.md \
-      clinical-trial-matching-skill/repo \
-      clinical-trial-matching-skill/scripts \
-      ~/.claude/skills/clinical-trial-matching-skill/
+cp -r clinical-trial-matching-skill/skills/* ~/.claude/skills/
 ```
 
-To invoke the skill, just describe the task in natural language —
-"帮我做临床试验匹配", "shortlist trials for this patient", etc. Claude
-will trigger it on `description` match. No slash command is needed.
-
-### 2. (Skipped — no Python deps to install)
-
-The dual-source retriever (`repo/retrieval/dual_source_search.py`)
-uses only Python stdlib (`urllib`, `concurrent.futures`). All LLM reasoning
-— keyword generation, criterion-level eligibility evaluation, ranking,
-and report writing — is performed by Claude in the conversation, not by a
-separate Python LLM client. So there is **no `pip install` step and no
-LLM API key to configure**. Just make sure you have Python 3.9+ on PATH.
-
-> Earlier releases vendored the upstream NCBI TrialGPT package, which
-> shipped 13 Python deps (torch / faiss / transformers / openai / …) and
-> required an Azure OpenAI key. None of that code was actually invoked by
-> the skill workflow, so it has been removed.
-
-### 3. Register the ChiCTR MCP server (one command)
-
-The ChiCTR data source is provided by the external
-[chictr-mcp-server](https://github.com/PancrePal-xiaoyibao/chictr-mcp-server)
-(TypeScript + Puppeteer). It can't be vendored into this repo — chictr.org.cn
-has no public JSON API and requires real browser automation for queries.
-
-Run the bundled installer instead of editing `~/.claude.json` by hand:
+### One-time: ChiCTR MCP setup
 
 ```bash
-bash scripts/setup-chictr-mcp.sh
+bash skills/clinical-trial-matching/scripts/setup-chictr-mcp.sh
 ```
 
-The script is idempotent. It:
-
-1. Verifies Node.js ≥ 18 is on PATH (npx ships with Node).
-2. Adds (or no-ops if present) the `chictr` entry under `mcpServers` in
-   `~/.claude.json` — keeps every other MCP server you have untouched.
-3. Smoke-tests `npx -y chictr-mcp-server` to confirm the npm package is
-   reachable.
-
-Then **restart Claude Code** so it picks up the new MCP server, and verify
-these tools appear in a new session:
-
-- `mcp__chictr__search_trials`
-- `mcp__chictr__get_trial_detail`
-
-If you'd rather configure manually, the equivalent JSON is:
-
-```json
-{
-  "mcpServers": {
-    "chictr": {
-      "command": "npx",
-      "args": ["-y", "chictr-mcp-server"]
-    }
-  }
-}
-```
-
-If the MCP server is unavailable, the skill will degrade gracefully and run
-with ClinicalTrials.gov only.
+Then restart Claude Code.
 
 ---
 
 ## Usage
 
-Once installed, invoke the skill from any Claude Code conversation with a
-patient summary:
+Invoke from any Claude Code conversation:
 
 ```
-诊断: 乙状结肠中分化腺癌 IV期, 双肺转移
-分子特征: KRAS G12C, MSS, ATM 胚系突变
-治疗线数: 5 线 (已用过化疗/靶向/免疫)
+帮我做临床试验匹配:
+诊断: 乙状结肠中分化腺癌 IV期, 双肺/肝转移
+分子特征: KRAS G12C, MSS, TMB 7.7
+治疗线数: 已完成2线 (mFOLFOX6 PR; KELOX+卡瑞利珠+阿帕替尼 PD), 当前三线 KELOX+卡瑞利珠+贝伐进行中
+心血管基础疾病严重 (HTN3 + CAD + 支架术后)
 ```
 
-The skill will:
+The parent `clinical-trial-matching` skill triggers automatically. It runs the 9-step pipeline (retrieval → metadata → gating → verification → feasibility → risk → efficacy → synthesis → render) and emits `~/Downloads/临床试验匹配报告_{patient_id}_{date}.html`.
 
-1. Extract the patient profile
-2. Generate an 8-dimension search plan
-3. Run parallel retrieval against ClinicalTrials.gov + ChiCTR
-4. Score candidates with criterion-level CoT + hard rules R1–R5
-5. Verify every NCT/ChiCTR ID against official APIs
-6. Emit an HTML report to `~/Downloads/`
+---
 
-See `SKILL.md` for the full workflow and prompt contract.
+## Architecture
+
+```
+┌───────────────────────────────────────────────────────────────────┐
+│ PARENT: clinical-trial-matching                                    │
+│   1. Read patient summary → patient.json (LLM)                     │
+│   2. Generate search_plan.json (LLM, 8-dim keyword strategy)       │
+│   3. Python: dual_source_search.py → nct_results.json              │
+│   4. MCP: ChiCTR query (mcp__chictr__*) → merge                    │
+│   5. Python: nct_verifier.py → verified.json (live API check)      │
+│   6. Python: feasibility.py → scored.json (5-dim deterministic)    │
+│                                                                     │
+│      ↓ for each candidate trial, dispatch subagent batches:        │
+│                                                                     │
+│   7a. → trial-gater          (gating verdict + R1–R5)              │
+│   7b. → trial-risk-annotator  (mechanism × cancer × patient)        │
+│   7c. → trial-efficacy-contextualizer (efficacy + per-line SoC)     │
+│                                                                     │
+│      ↓ aggregate, then:                                            │
+│                                                                     │
+│   8. → decision-synthesizer   (Top-N paths + GoC + diversity)      │
+│   9. Python: html_renderer.py → report.html                        │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Generalization principle
+
+> **Code is mechanism. Knowledge is in subskills.**
+>
+> Adding a new cancer type, drug class, or risk narrative MUST be done by editing a rule file in the relevant subskill (`skills/{subskill}/rules/*.md`), never by editing Python code or extending a JSON lookup table.
+>
+> If you find yourself adding a new branch to `feasibility.py` or a new entry to `clinical_ontology.json` for a clinical-knowledge reason — STOP. That belongs in a subskill rule file.
 
 ---
 
 ## License & attribution
 
-- **CancerDAO additions** (the skill definition, dual-source orchestrator,
-  HTML report, workflow, hard grading rules R1–R5, and the criterion-level
-  CoT prompt contract): [MIT](./LICENSE)
-- **NCBI TrialGPT** (Jin Q. et al., *Matching Patients to Clinical Trials
-  with Large Language Models*): the original NCBI Python package is no
-  longer vendored — its retrieval/matching/ranking modules were unused by
-  this skill's workflow. The 8-dimension keyword strategy and
-  criterion-level evaluation pattern are conceptually inspired by their
-  paper; please cite it if you build on this work.
-- **chictr-mcp-server** is an external dependency maintained by
-  [PancrePal-xiaoyibao](https://github.com/PancrePal-xiaoyibao/chictr-mcp-server).
-
-See [`NOTICE.md`](./NOTICE.md) for details.
+- **CancerDAO additions** (skill definitions, dual-source orchestrator, HTML report, workflow, subskill architecture): [MIT](./LICENSE)
+- **NCBI TrialGPT** inspired the 8-dimension keyword strategy and criterion-level CoT pattern. The original Python package is not vendored. See [`NOTICE.md`](./NOTICE.md).
+- **chictr-mcp-server** is an external dependency: [PancrePal-xiaoyibao/chictr-mcp-server](https://github.com/PancrePal-xiaoyibao/chictr-mcp-server).
 
 ---
 
 ## Contributing
 
-Issues and PRs welcome at
-<https://github.com/CancerDAO/clinical-trial-matching-skill>.
+Issues and PRs welcome at <https://github.com/CancerDAO/clinical-trial-matching-skill>.
 
-Built by [CancerDAO](https://github.com/CancerDAO) —
-open-source AI for cancer patients.
+When adding a new cancer type's SoC rules or risk narratives, please:
+1. Create the rule file in the appropriate subskill's `rules/` directory
+2. Cross-reference any pivotal trials with PMID
+3. Note evidence tier explicitly
+4. Add a worked example in the parent skill's `examples/`
+
+Built by [CancerDAO](https://github.com/CancerDAO) — open-source AI for cancer patients.
