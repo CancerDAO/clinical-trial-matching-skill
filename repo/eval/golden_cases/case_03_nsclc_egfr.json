@@ -1,0 +1,47 @@
+{
+  "case_id": "case_03_nsclc_egfr",
+  "case_description": "NSCLC EGFR L858R + T790M post-osimertinib progression — used to test cross-cancer routing",
+  "patient_profile": {
+    "patient_id": "case_03",
+    "summary": "Metastatic NSCLC EGFR L858R/T790M, post-osimertinib progression, ECOG 1",
+    "cancer_type": "NSCLC",
+    "stage": "IV",
+    "disease_stage": "metastatic",
+    "metastasis_sites": ["bone", "brain"],
+    "mutations": ["EGFR L858R", "EGFR T790M"],
+    "biomarkers_known": {},
+    "treatment_lines_completed": 1,
+    "treatment_history": [
+      {"line": 1, "regimen": "Osimertinib", "cycles": 12, "outcome": "PD"}
+    ],
+    "prior_therapies": ["osimertinib", "EGFR-TKI"],
+    "ecog": 1,
+    "comorbidities": [],
+    "organ_function": "normal",
+    "hla_typed": false,
+    "cns_imaging_done": true,
+    "viral_serology_done": true,
+    "age": 58,
+    "country": "China",
+    "willing_to_travel_internationally": false,
+    "affordability_tier": "medium"
+  },
+  "expected_gating": {
+    "must_match_keywords": ["EGFR", "osimertinib", "amivantamab", "patritumab", "T790M", "C797S"],
+    "min_keyword_hits": 1,
+    "must_exclude": [
+      "NCT06500676",
+      "NCT04146298",
+      "NCT06040541"
+    ]
+  },
+  "expected_decision_paths": {
+    "must_have_egfr_path": true,
+    "minimum_decision_paths": 1
+  },
+  "expected_consistency_flags": {
+    "min_count": 0,
+    "_note": "Case_03 (ECOG 1, age 58, brain mets) — flag is optional"
+  },
+  "expected_goc_triggered": false
+}

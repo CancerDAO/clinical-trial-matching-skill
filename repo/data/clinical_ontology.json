@@ -1,0 +1,201 @@
+{
+  "schema_version": "1.0",
+  "last_reviewed": "2026-05-07",
+  "_doc": "All cancer-specific clinical knowledge lives here. Code MUST NOT hard-code cancer aliases, anti-aliases, chemo regimens, OS thresholds, or prior-therapy classes. Adding a new cancer = add an entry here, no code change required.",
+
+  "_extension_guide": {
+    "to_support_new_cancer_X": [
+      "1. Add entry to cancers.X with: aliases (synonyms), anti_aliases (histologic distinctions to exclude), median_os_at_line_n (for GoC trigger), default_imaging_modality.",
+      "2. Add chemo_regimens entries that are first-line or commonly-used in cancer X.",
+      "3. Add prior_therapy_classes entries for the targeted-therapy classes used in cancer X.",
+      "4. Add SoC entries to data/soc_benchmarks.json for cancer X × line × molecular subtype.",
+      "5. (Optional but recommended) Add risk_profiles to data/risk_taxonomy.json for cancer-specific mechanism risks.",
+      "6. (Optional) Add efficacy snapshots to data/efficacy_database.json for trials/drugs in cancer X."
+    ]
+  },
+
+  "cancers": {
+    "PDAC": {
+      "full_names": ["Pancreatic Ductal Adenocarcinoma", "pancreatic adenocarcinoma"],
+      "aliases": ["pancreatic", "pancreas", "pdac"],
+      "anti_aliases": ["neuroendocrine", "net ", "pnet", "carcinoid", "islet cell", "endocrine tumor"],
+      "common_metastasis_sites": ["liver", "lung", "peritoneum", "lymph node"],
+      "median_os_months_at_line": {
+        "0_naive_metastatic": 11.0,
+        "1_post_first_line": 6.0,
+        "2_post_second_line": 4.0,
+        "3_plus": 3.0
+      },
+      "goc_trigger_threshold_months": 6.0,
+      "rapid_progression_cycles_threshold": 4,
+      "tumor_microenvironment_immunosuppressive": true
+    },
+    "NSCLC": {
+      "full_names": ["Non-Small Cell Lung Cancer", "non-small cell lung carcinoma"],
+      "aliases": ["nsclc", "non-small cell lung", "non small cell lung", "lung cancer"],
+      "anti_aliases": ["sclc", "small cell lung", "small-cell"],
+      "common_metastasis_sites": ["brain", "bone", "liver", "adrenal", "contralateral lung"],
+      "median_os_months_at_line": {
+        "0_naive_metastatic_egfr_mut": 38.0,
+        "0_naive_metastatic_alk_pos": 80.0,
+        "0_naive_metastatic_kras_g12c": 13.0,
+        "0_naive_metastatic_no_driver": 14.0,
+        "1_post_first_line": 12.0,
+        "2_post_second_line": 8.0,
+        "3_plus": 6.0
+      },
+      "goc_trigger_threshold_months": 6.0,
+      "rapid_progression_cycles_threshold": 4,
+      "tumor_microenvironment_immunosuppressive": false
+    },
+    "CRC": {
+      "full_names": ["Colorectal Adenocarcinoma", "colorectal cancer", "colon cancer"],
+      "aliases": ["colorectal", "colon cancer", "rectal", "crc"],
+      "anti_aliases": ["neuroendocrine", "anal squamous"],
+      "common_metastasis_sites": ["liver", "lung", "peritoneum"],
+      "median_os_months_at_line": {
+        "0_naive_metastatic": 28.0,
+        "1_post_first_line": 16.0,
+        "2_post_second_line": 9.0,
+        "3_plus": 6.0
+      },
+      "goc_trigger_threshold_months": 6.0,
+      "rapid_progression_cycles_threshold": 4,
+      "tumor_microenvironment_immunosuppressive": false
+    },
+    "_default": {
+      "_doc": "Fallback for unknown cancers. Lookup falls through to here.",
+      "aliases": [],
+      "anti_aliases": [],
+      "median_os_months_at_line": {"_default_unknown_threshold": 12.0},
+      "goc_trigger_threshold_months": 6.0,
+      "rapid_progression_cycles_threshold": 4
+    }
+  },
+
+  "chemo_regimens": {
+    "_doc": "Each regimen lists its component drugs. Used by 'chemo backbone overlap' detector to flag trials whose backbone matches a regimen the patient already failed.",
+    "FOLFIRINOX": {
+      "components": ["5-fu", "5-fluorouracil", "fluorouracil", "leucovorin", "irinotecan", "oxaliplatin", "folinic acid"],
+      "aliases": ["folfirinox", "mfolfirinox", "modified folfirinox"],
+      "common_in": ["PDAC", "CRC"]
+    },
+    "Gem+Nab-P (AG)": {
+      "components": ["gemcitabine", "nab-paclitaxel", "abraxane", "albumin-bound paclitaxel"],
+      "aliases": ["ag regimen", "gem/nab-p", "gemnabp"],
+      "common_in": ["PDAC"]
+    },
+    "NALIRIFOX": {
+      "components": ["nal-iri", "liposomal irinotecan", "onivyde", "5-fu", "leucovorin", "oxaliplatin"],
+      "aliases": ["nalirifox", "napoli-3 regimen"],
+      "common_in": ["PDAC"]
+    },
+    "5-FU + nal-IRI (Onivyde)": {
+      "components": ["5-fu", "leucovorin", "nal-iri", "liposomal irinotecan", "onivyde"],
+      "aliases": ["napoli-1 regimen"],
+      "common_in": ["PDAC"]
+    },
+    "FOLFOX": {
+      "components": ["5-fu", "leucovorin", "oxaliplatin"],
+      "aliases": ["folfox", "mfolfox6", "folfox4"],
+      "common_in": ["CRC", "gastric"]
+    },
+    "FOLFIRI": {
+      "components": ["5-fu", "leucovorin", "irinotecan"],
+      "aliases": ["folfiri"],
+      "common_in": ["CRC"]
+    },
+    "Carbo + Pem": {
+      "components": ["carboplatin", "pemetrexed"],
+      "aliases": ["carbo/pem", "platinum-pem"],
+      "common_in": ["NSCLC non-squamous"]
+    },
+    "Carbo + Pacli + Bev": {
+      "components": ["carboplatin", "paclitaxel", "bevacizumab"],
+      "common_in": ["NSCLC", "ovarian"]
+    },
+    "Cis + Etoposide": {
+      "components": ["cisplatin", "etoposide"],
+      "aliases": ["EP regimen"],
+      "common_in": ["NSCLC squamous", "SCLC"]
+    },
+    "AC-T (anthracycline-taxane)": {
+      "components": ["doxorubicin", "cyclophosphamide", "paclitaxel", "docetaxel"],
+      "common_in": ["breast"]
+    },
+    "TAC": {
+      "components": ["docetaxel", "doxorubicin", "cyclophosphamide"],
+      "common_in": ["breast"]
+    }
+  },
+
+  "prior_therapy_classes": {
+    "_doc": "Drug-class buckets for 'prior therapy exclusion' matching. Each entry: aliases for class name, components (drug names) that count as having received this class.",
+    "KRAS G12D inhibitor": {
+      "aliases": ["kras g12d inhibitor", "kras g12d targeted therapy", "kras g12d degrader"],
+      "components": ["mrtx1133", "asp3082", "setidegrasib", "rmc-9805", "eras-4001",
+                     "incb161734", "jab-22000", "vs-7375", "d3s-003", "gfh375", "hrs-4642",
+                     "arv-806", "pf-07934040", "tsn1611", "asp5834"]
+    },
+    "KRAS G12C inhibitor": {
+      "aliases": ["kras g12c inhibitor"],
+      "components": ["sotorasib", "adagrasib", "glecirasib", "divarasib", "fulzerasib",
+                     "olomorasib", "garsorasib", "calderasib", "mk-1084", "d3s-001",
+                     "pf-07934040", "bgb-53038", "lumakras", "krazati"]
+    },
+    "Pan-RAS / Multi-RAS inhibitor": {
+      "aliases": ["pan-ras inhibitor", "multi-ras inhibitor", "ras-on inhibitor"],
+      "components": ["rmc-6236", "daraxonrasib", "rmc-7977", "yl-17231", "bbo-11818"]
+    },
+    "EGFR antibody": {
+      "aliases": ["egfr antibody", "anti-egfr", "egfr mab"],
+      "components": ["cetuximab", "panitumumab", "nimotuzumab", "necitumumab", "amivantamab"]
+    },
+    "EGFR-TKI": {
+      "aliases": ["egfr-tki", "egfr inhibitor", "egfr tyrosine kinase inhibitor"],
+      "components": ["erlotinib", "gefitinib", "afatinib", "osimertinib", "lazertinib",
+                     "almonertinib", "furmonertinib", "rociletinib", "naquotinib",
+                     "dacomitinib", "icotinib", "savolitinib"]
+    },
+    "ALK inhibitor": {
+      "aliases": ["alk-tki", "alk inhibitor"],
+      "components": ["crizotinib", "alectinib", "brigatinib", "lorlatinib", "ceritinib", "ensartinib", "iruplinalkib"]
+    },
+    "Immune Checkpoint Inhibitor (ICI)": {
+      "aliases": ["icpi", "ici", "checkpoint inhibitor", "anti-pd-1", "anti-pd-l1", "anti-ctla-4"],
+      "components": ["pembrolizumab", "nivolumab", "atezolizumab", "durvalumab", "ipilimumab",
+                     "cemiplimab", "tislelizumab", "sintilimab", "camrelizumab", "toripalimab",
+                     "adebrelimab", "serplulimab", "penpulimab", "envafolimab", "retifanlimab"]
+    },
+    "PARP inhibitor": {
+      "components": ["olaparib", "talazoparib", "rucaparib", "niraparib", "fluzoparib", "pamiparib"]
+    },
+    "CDK4/6 inhibitor": {
+      "components": ["palbociclib", "ribociclib", "abemaciclib", "dalpiciclib", "trilaciclib"]
+    },
+    "BRAF inhibitor": {
+      "components": ["vemurafenib", "dabrafenib", "encorafenib"]
+    },
+    "MEK inhibitor": {
+      "components": ["trametinib", "binimetinib", "cobimetinib", "selumetinib"]
+    },
+    "HER2 ADC": {
+      "components": ["trastuzumab deruxtecan", "ds-8201", "t-dxd", "trastuzumab emtansine", "t-dm1", "disitamab vedotin"]
+    },
+    "PRMT5 inhibitor": {
+      "aliases": ["prmt5 inhibitor", "mat2a inhibitor"],
+      "components": ["tng462", "tng908", "mrtx1719", "amg 193", "prt-3789", "jnj-92044570"]
+    }
+  },
+
+  "biomarker_aliases": {
+    "_doc": "Biomarker IHC/expression matching aliases. Used by gating to detect biomarker requirements.",
+    "CLDN18.2": ["claudin 18.2", "claudin18.2", "cldn 18.2", "cldn18.2"],
+    "MSLN": ["mesothelin", "msln"],
+    "MTAP": ["mtap loss", "mtap deletion", "mtap-null"],
+    "HER2": ["her2 positive", "her2 amplification", "her2 ihc 3+"],
+    "PD-L1": ["pd-l1", "pdl1"],
+    "TROP2": ["trop2", "trop-2"],
+    "CEA": ["cea positive", "carcinoembryonic antigen"]
+  }
+}
