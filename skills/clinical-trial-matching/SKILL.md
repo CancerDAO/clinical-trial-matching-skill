@@ -125,7 +125,7 @@ Output a `search_plan.json` per the schema in `examples/PT-17CE02BC33-search-pla
 5. **Exhaustive drug names** — list every known investigational + approved drug in the target class (sotorasib, adagrasib, divarasib, glecirasib, calderasib, D3S-001, PF-07934040, JAB-21822, BGB-53038, MK-1084, GDC-6036, and any current pipeline)
 6. **Cell therapy (mutation-agnostic)** — CAR-T, TIL, TCR-T for the cancer type + targets (CEA, GUCY2C, etc.)
 7. **Immunotherapy (post-PD-1, MSS-aware)** — bispecific, LAG-3, TIGIT for resistance contexts
-8. **Chinese keywords (ChiCTR)** — single-token, no compound queries (ChiCTR's tokenizer is brittle — "结直肠癌 KRAS" returns empty; use "结直肠癌" + "KRAS" separately)
+8. **Chinese keywords (ChiCTR)** — **single-token only, no compound queries**. ChiCTR's tokenizer is brittle: any space-joined query like `"结直肠癌 KRAS"` will silently return `[]` even when 30+ matching trials exist on each individual term. **Concrete rule**: every entry in keyword_groups[7].queries[].term MUST contain zero whitespace and zero "+" / "AND" / "&" connectives. Emit each token as a separate `{term: "..."}` entry. The MCP-side `mcp__chictr__search_trials` does not auto-degrade compound tokens; this rule is enforced at search_plan generation time.
 
 ### Step 3 — Dual-source retrieval (Python + MCP)
 
@@ -162,7 +162,19 @@ Agent(subagent_type="general-purpose", description="trial-gater batch",
               skills/trial-gater/rules/output-gating-verdict-schema.md.")
 ```
 
-Same pattern for `trial-risk-annotator` and `trial-efficacy-contextualizer`. Aggregate outputs into `analyzed.json`:
+Same pattern for `trial-risk-annotator` and `trial-efficacy-contextualizer`.
+
+**Aggregator contract (enforce when collecting subagent outputs):**
+
+All three subskills (gater, risk-annotator, efficacy-contextualizer) MUST emit batch outputs under the `"results"` top-level key:
+
+```json
+{ "results": [ { "trial_id": "NCT...", ...payload... }, ... ] }
+```
+
+The aggregator code that reads these files should also accept the legacy aliases `"annotations"` (risk batches) and `"trials"` (efficacy batches) as fallbacks for backward compatibility, but new subagent invocations should always be told to write `"results"`. Do **not** invent new top-level keys — adding a fourth alias forces every downstream consumer to add another fallback branch.
+
+Aggregate outputs into `analyzed.json`:
 
 ```
 {

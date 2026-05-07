@@ -35,6 +35,8 @@ v1.7.x had `risk_taxonomy.json` keyed on mechanism only (e.g. `"egfr_combo_pdac"
 
 ## Output
 
+**Per-trial object:**
+
 ```json
 {
   "trial_id": "NCT...",
@@ -54,6 +56,19 @@ v1.7.x had `risk_taxonomy.json` keyed on mechanism only (e.g. `"egfr_combo_pdac"
   ]
 }
 ```
+
+**Batch aggregate (REQUIRED top-level shape — matches trial-gater, trial-efficacy-contextualizer):**
+
+```json
+{
+  "results": [
+    { "trial_id": "NCT06459180", "risks": [...] },
+    { "trial_id": "ChiCTR2600120786", "risks": [...] }
+  ]
+}
+```
+
+Use `"results"` as the top-level key. Do not invent aliases like `"annotations"`, `"trials"`, or `"items"` — the parent skill's aggregator looks for `results` first. Optional sibling fields (e.g. `patient_cancer_context`, `batch_metadata`) are allowed alongside `results` but the per-trial array MUST live under `results`.
 
 ## Process
 

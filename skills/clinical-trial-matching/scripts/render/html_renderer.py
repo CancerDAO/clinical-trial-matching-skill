@@ -1,12 +1,22 @@
 """
-html_renderer.py — v1.6.0
+html_renderer.py — v2.0.0
 
-Render the v1.6 Decision Report (with Match List as collapsible second layer) as
+Render the Decision Report (with Match List as collapsible second layer) as
 a single self-contained HTML file. No external dependencies.
 
-The output replaces the v1.5 single-layer HTML; users see a Decision Report
-(top of page) + collapsible Match List (full inventory) + appendices for
-consistency flags + GoC + citations.
+v2 changes:
+- Removed hardcoded "PDAC" / cancer-type-specific labels in efficacy block;
+  cancer type is read from patient profile dynamically.
+- Accepts decision-synthesizer's canonical output schema for
+  alternatives_comparison ({alternative_id, alternative_title, why_picked_won})
+  AND its alias schema ({trial_id, trial_title, reason_not_chosen}) for
+  backward compatibility.
+- Same flexible-key handling for consistency_flags ({title, detail} OR
+  {flag, evidence}).
+- Null-safe handling of `verification` field (ChiCTR trials lack NCT-API
+  verification but should still render).
+- Null-safe `trial_id` (decision_paths can include "continue current SoC"
+  with no trial reference).
 """
 from __future__ import annotations
 
@@ -23,7 +33,9 @@ def _safe(s: Any) -> str:
     return html.escape(str(s))
 
 
-def _trial_url(trial_id: str) -> str:
+def _trial_url(trial_id: Any) -> str:
+    if not trial_id or not isinstance(trial_id, str):
+        return "#"
     if trial_id.startswith("NCT"):
         return f"https://clinicaltrials.gov/study/{trial_id}"
     if trial_id.startswith("ChiCTR"):
@@ -31,8 +43,16 @@ def _trial_url(trial_id: str) -> str:
     return "#"
 
 
+def _verification(t: dict) -> dict:
+    """Null-safe accessor for trial.verification — ChiCTR/skipped entries return {}."""
+    v = t.get("verification") if isinstance(t, dict) else None
+    return v if isinstance(v, dict) else {}
+
+
 def render_decision_path(p: dict) -> str:
-    rank = p["rank"]
+    rank = p.get("rank", "?")
+    # v2 schema uses `role`; v1.7 used `path_type`. Accept either.
+    path_kind = p.get("path_type") or p.get("role") or "secondary"
     badge = {
         "primary": '<span class="badge badge-good">主推路径</span>',
         "primary_overseas": '<span class="badge badge-good">主推 · 海外</span>',
@@ -41,25 +61,49 @@ def render_decision_path(p: dict) -> str:
         "secondary_cell_therapy": '<span class="badge badge-info">备选 · 细胞治疗</span>',
         "bridging": '<span class="badge badge-warn">桥接 / Plan B</span>',
         "fallback": '<span class="badge badge-warn">回退方案</span>',
-    }.get(p.get("path_type", "secondary"), '<span class="badge badge-info">备选路径</span>')
+    }.get(path_kind, '<span class="badge badge-info">备选路径</span>')
 
     eff = p.get("efficacy_snapshot") or {}
     eff_metrics = eff.get("metrics", {}) if eff else {}
-    vs_soc = p.get("vs_soc", {})
-    feas = p.get("feasibility", {})
-    sub = feas.get("sub_scores", {})
-    risks = p.get("risks", [])
-    timeline = p.get("timeline", {})
-    blockers = p.get("blockers_status", {})
+    vs_soc = p.get("vs_soc") or {}
+
+    # Feasibility: schema spec stores flat `feasibility_score` + `feasibility_dims`;
+    # legacy v1.7 stored a nested dict at `feasibility`. Accept both.
+    feas = p.get("feasibility") or {}
+    if not feas and "feasibility_score" in p:
+        feas = {
+            "composite": p.get("feasibility_score"),
+            "sub_scores": p.get("feasibility_dims") or {},
+            "flags": p.get("feasibility_flags") or [],
+        }
+    sub = feas.get("sub_scores") or {}
+
+    risks = p.get("risks") or []
+    timeline = p.get("timeline") or p.get("estimated_timeline") or {}
+
+    # Blockers: spec uses flat `blockers_satisfied` / `blockers_pending`;
+    # v1.7 used nested `blockers_status: {satisfied: [...], pending: [...]}`. Accept both.
+    blockers = p.get("blockers_status") or {}
+    if not blockers and ("blockers_satisfied" in p or "blockers_pending" in p):
+        blockers = {
+            "satisfied": p.get("blockers_satisfied") or [],
+            "pending": p.get("blockers_pending") or [],
+            "advisors_unknown": p.get("advisors_unknown") or [],
+        }
 
     # Efficacy snapshot — v1.7: distinct visual style for estimate vs real data
     eff_html = ""
     if eff:
         match_type = eff.get("match_type", "")
-        if match_type == "exact_nct":
-            orr = eff_metrics.get("orr") or eff_metrics.get("orr_pdac")
-            pfs = eff_metrics.get("median_pfs_months") or eff_metrics.get("median_pfs_months_pdac")
-            os_mo = eff_metrics.get("median_os_months")
+        if match_type in ("exact_nct", "trial_specific"):
+            # Accept the synthesizer's canonical key names AND legacy aliases.
+            orr = (eff_metrics.get("orr")
+                   or eff_metrics.get("expected_orr")
+                   or eff_metrics.get("orr_pdac"))  # legacy fallback
+            pfs = (eff_metrics.get("median_pfs_months")
+                   or eff_metrics.get("expected_pfs_months")
+                   or eff_metrics.get("median_pfs_months_pdac"))  # legacy fallback
+            os_mo = eff_metrics.get("median_os_months") or eff_metrics.get("expected_os_months")
             src = eff.get("source", {})
             eff_html = f"""
             <div class="eff-block eff-real">
@@ -73,23 +117,34 @@ def render_decision_path(p: dict) -> str:
                 </ul>
                 <div class="caveat">{_safe(eff.get('caveats',''))}</div>
             </div>"""
-        elif match_type == "drug_class_baseline":
-            cls = eff.get("drug_class", "?")
+        elif match_type in ("drug_class_baseline", "mutation_class_baseline"):
+            cls = eff.get("drug_class") or eff.get("class") or "?"
             m = eff_metrics
+            cancer_label = _safe(eff.get("cancer_context") or "该癌种")
+            # Accept canonical (expected_orr / expected_orr_range) AND legacy
+            # cancer-specific keys (expected_orr_2L_pdac, expected_orr_2L_crc, ...)
+            expected_orr = (m.get("expected_orr_range")
+                            or m.get("expected_orr")
+                            or next((m[k] for k in m if k.startswith("expected_orr_")), "N/A"))
+            expected_pfs = m.get("expected_pfs_range") or m.get("expected_pfs_months", "N/A")
             eff_html = f"""
             <div class="eff-block eff-estimate">
                 <div class="eff-banner">⚠️ 以下为<strong>机制类基线估算</strong>，<u>非该试验真实数据</u> — 实际 ORR 可能显著高于或低于此区间</div>
                 <div class="eff-title">疗效估算（机制类）</div>
                 <ul>
                     <li>机制类: <strong>{_safe(cls)}</strong></li>
-                    <li>预期 ORR (2L PDAC): <strong>{_safe(m.get('expected_orr_2L_pdac','N/A'))}</strong> <span class="muted">(机制类公开数据中位数)</span></li>
-                    <li>预期 mPFS: <strong>{_safe(m.get('expected_pfs_months','N/A'))} 月</strong></li>
+                    <li>预期 ORR ({cancer_label}): <strong>{_safe(expected_orr)}</strong> <span class="muted">(机制类公开数据中位数)</span></li>
+                    <li>预期 mPFS: <strong>{_safe(expected_pfs)} 月</strong></li>
                 </ul>
-                <div class="caveat">{_safe(eff.get('caveats') or '试验级数据未发布；以上为该机制类的公开 PDAC 基线估算。')}</div>
+                <div class="caveat">{_safe(eff.get('caveats') or f'试验级数据未发布；以上为该机制类在{cancer_label}的公开基线估算。')}</div>
             </div>"""
         elif match_type == "drug_match":
-            orr = eff_metrics.get("orr") or eff_metrics.get("orr_pdac")
-            pfs = eff_metrics.get("median_pfs_months") or eff_metrics.get("median_pfs_months_pdac")
+            orr = (eff_metrics.get("orr")
+                   or eff_metrics.get("expected_orr")
+                   or eff_metrics.get("orr_pdac"))  # legacy
+            pfs = (eff_metrics.get("median_pfs_months")
+                   or eff_metrics.get("expected_pfs_months")
+                   or eff_metrics.get("median_pfs_months_pdac"))  # legacy
             src = eff.get("source", {})
             eff_html = f"""
             <div class="eff-block eff-drug-match">
@@ -138,27 +193,46 @@ def render_decision_path(p: dict) -> str:
         {f'<div class="caveat">⚠️ {len(feas.get("flags",[]))} 个风险标记: ' + '; '.join(_safe(x) for x in feas.get('flags',[])[:5]) + '</div>' if feas.get('flags') else ''}
     </div>"""
 
-    # Risks
+    # Risks. Accept canonical (`narrative` per trial-risk-annotator schema) and
+    # legacy (`notes`). Render up to first 3 bullets per risk.
     risk_html = ""
     if risks:
         risk_items = []
         for r in risks:
-            level = r.get("risk_level", "")
-            level_class = {"high_uncertainty": "badge-danger", "high_logistical": "badge-danger",
-                            "moderate": "badge-warn", "moderate_uncertainty": "badge-warn",
-                            "biomarker_dependent": "badge-warn", "experimental": "badge-warn"}.get(level, "badge-info")
-            notes_html = "<ul>" + "".join(f"<li>{_safe(n)}</li>" for n in r.get("notes", [])[:3]) + "</ul>"
-            risk_items.append(f'<div class="risk-item"><strong>{_safe(r.get("mechanism","?"))}</strong> <span class="badge {level_class}">{_safe(level)}</span>{notes_html}</div>')
+            level = r.get("risk_level") or r.get("level") or ""
+            level_class = {
+                "high": "badge-danger",
+                "high_uncertainty": "badge-danger",
+                "high_logistical": "badge-danger",
+                "moderate": "badge-warn",
+                "moderate_uncertainty": "badge-warn",
+                "biomarker_dependent": "badge-warn",
+                "experimental": "badge-warn",
+                "low": "badge-info",
+            }.get(level, "badge-info")
+            bullets = r.get("narrative") or r.get("notes") or []
+            if isinstance(bullets, str):
+                bullets = [bullets]
+            notes_html = "<ul>" + "".join(f"<li>{_safe(n)}</li>" for n in bullets[:3]) + "</ul>"
+            mech_label = r.get("mechanism") or r.get("key") or "?"
+            risk_items.append(
+                f'<div class="risk-item"><strong>{_safe(mech_label)}</strong> '
+                f'<span class="badge {level_class}">{_safe(level)}</span>{notes_html}</div>'
+            )
         risk_html = f'<div class="risk-block"><div class="eff-title">风险标记</div>{"".join(risk_items)}</div>'
 
-    # Timeline
+    # Timeline. Schema spec uses `screening_window`, `earliest_first_dose`,
+    # `critical_path_steps` (list); legacy used `expected_first_dose`,
+    # `critical_path` (string). Accept both.
+    cp = timeline.get("critical_path_steps") or timeline.get("critical_path")
+    cp_str = "；".join(_safe(s) for s in cp) if isinstance(cp, list) else _safe(cp or "?")
     tl_html = f"""
     <div class="timeline-block">
         <div class="eff-title">时间表</div>
         <ul>
             <li>筛选窗口: <strong>{_safe(timeline.get('screening_window','?'))}</strong></li>
-            <li>预计首次给药: <strong>{_safe(timeline.get('expected_first_dose','?'))}</strong></li>
-            <li>关键路径: {_safe(timeline.get('critical_path','?'))}</li>
+            <li>预计首次给药: <strong>{_safe(timeline.get('earliest_first_dose') or timeline.get('expected_first_dose') or '?')}</strong></li>
+            <li>关键路径: {cp_str}</li>
         </ul>
     </div>"""
 
@@ -185,16 +259,25 @@ def render_decision_path(p: dict) -> str:
         flag_banners.append(f'<div class="warn-banner">⚠️ <strong>同类靶向重复:</strong> {_safe(v17["targeted_overlap"]["reason"])}</div>')
     flags_html = "".join(flag_banners)
 
-    # v1.7 — Alternatives comparison
+    # v1.7+v2 — Alternatives comparison.
+    # Accept canonical ({alternative_id, alternative_title, why_picked_won})
+    # and synthesizer-emitted aliases ({trial_id, trial_title, reason_not_chosen}).
     alts = p.get("alternatives_comparison", []) or []
     alts_html = ""
     if alts:
         alt_items = []
         for alt in alts:
-            reasons_str = "；".join(_safe(r) for r in alt.get("why_picked_won", []))
+            alt_id = alt.get("alternative_id") or alt.get("trial_id") or ""
+            alt_title = alt.get("alternative_title") or alt.get("trial_title") or ""
+            reasons = alt.get("why_picked_won")
+            if reasons is None:
+                # `reason_not_chosen` is a single string; wrap to list for uniform render
+                rnc = alt.get("reason_not_chosen")
+                reasons = [rnc] if rnc else []
+            reasons_str = "；".join(_safe(r) for r in reasons)
             alt_items.append(
-                f'<li><a class="badge-nct" href="{_trial_url(alt["alternative_id"])}" target="_blank">{_safe(alt["alternative_id"])}</a> '
-                f'<span class="muted">({_safe(alt["alternative_title"])})</span> — 原因: {reasons_str}</li>'
+                f'<li><a class="badge-nct" href="{_trial_url(alt_id)}" target="_blank">{_safe(alt_id)}</a> '
+                f'<span class="muted">({_safe(alt_title)})</span> — 原因: {reasons_str}</li>'
             )
         alts_html = f"""
         <div class="alts-block">
@@ -212,19 +295,27 @@ def render_decision_path(p: dict) -> str:
             <p style="margin:0;font-size:13px;line-height:1.7">{_safe(consequences)}</p>
         </div>"""
 
+    # v2: trial_id may be missing for non-trial paths (e.g. "continue current SoC")
+    trial_id = p.get("trial_id")
+    trial_title = p.get("trial_title") or p.get("title") or ""
+    if trial_id and isinstance(trial_id, str) and (trial_id.startswith("NCT") or trial_id.startswith("ChiCTR")):
+        trial_id_html = f'<a class="badge-nct" href="{_trial_url(trial_id)}" target="_blank">{_safe(trial_id)}</a>'
+    else:
+        trial_id_html = f'<span class="badge badge-info">{_safe(trial_id or "无关联试验")}</span>'
+
     return f"""
-    <div class="path-card path-{p.get('path_type','secondary')}">
+    <div class="path-card path-{path_kind}">
         <div class="path-header">
             <div class="path-rank">#{rank}</div>
             <div class="path-meta">
                 {badge}
-                <div class="path-trial-id"><a class="badge-nct" href="{_trial_url(p['trial_id'])}" target="_blank">{_safe(p['trial_id'])}</a> · {_safe(p.get('phase','?'))} · {_safe(p.get('sponsor',''))}</div>
-                <div class="path-trial-title">{_safe(p['trial_title'])}</div>
+                <div class="path-trial-id">{trial_id_html} · {_safe(p.get('phase','?'))} · {_safe(p.get('sponsor',''))}</div>
+                <div class="path-trial-title">{_safe(trial_title)}</div>
             </div>
         </div>
         {flags_html}
-        <div class="path-rationale"><strong>核心理由:</strong> {_safe(p.get('rationale_one_liner',''))}</div>
-        <div class="path-detail">{_safe(p.get('rationale_detailed','')).replace('chr(10)', '<br/>')}</div>
+        <div class="path-rationale"><strong>核心理由:</strong> {_safe(p.get('rationale_one_liner') or p.get('rationale') or '')}</div>
+        <div class="path-detail">{_safe(p.get('rationale_detailed') or '').replace(chr(10), '<br/>')}</div>
         {eff_html}
         {soc_html}
         {feas_html}
@@ -286,13 +377,29 @@ def render_html(report: dict, gated_data: dict, patient: dict, output_path: str)
     # Decision paths section
     paths_html = "\n".join(render_decision_path(p) for p in paths) if paths else '<div class="warn-banner">⚠️ 无路径通过 feasibility + diversity 阈值。请见下方完整匹配清单。</div>'
 
-    # Consistency flags banner
+    # Consistency flags banner.
+    # Accept canonical ({severity, title, detail}) and synthesizer-emitted
+    # alias ({severity, flag, evidence}). "alert" severity maps to danger.
     consistency_html = ""
     if consistency:
         flag_rows = []
+        sev_class = {
+            "info": "badge-info",
+            "warn": "badge-warn",
+            "warning": "badge-warn",
+            "danger": "badge-danger",
+            "alert": "badge-danger",
+            "critical": "badge-danger",
+        }
         for f in consistency:
-            cls = {"info": "badge-info", "warn": "badge-warn", "danger": "badge-danger"}.get(f["severity"], "badge-info")
-            flag_rows.append(f'<div class="flag-row"><span class="badge {cls}">{f["severity"].upper()}</span><div><strong>{_safe(f["title"])}</strong><div class="muted">{_safe(f["detail"])}</div></div></div>')
+            sev = (f.get("severity") or "info").lower()
+            cls = sev_class.get(sev, "badge-info")
+            title = f.get("title") or f.get("flag") or ""
+            detail = f.get("detail") or f.get("evidence") or ""
+            flag_rows.append(
+                f'<div class="flag-row"><span class="badge {cls}">{_safe(sev.upper())}</span>'
+                f'<div><strong>{_safe(title)}</strong><div class="muted">{_safe(detail)}</div></div></div>'
+            )
         consistency_html = f'<div class="consistency-banner"><div class="banner-title">⚠️ 患者画像一致性提示 ({len(consistency)} 项)</div>{"".join(flag_rows)}</div>'
 
     # GoC section
@@ -504,13 +611,13 @@ def render_html(report: dict, gated_data: dict, patient: dict, output_path: str)
     <section class="section">
         <div class="title">声明 + 校验摘要</div>
         <p style="font-size:13px; color:var(--muted); line-height:1.7">
-            <strong>声明:</strong> 本报告由 TrialGPT v1.6.0 系统生成，仅提供临床试验<strong>信息匹配</strong>，
+            <strong>声明:</strong> 本报告由 clinical-trial-matching {_safe(report.get('report_version','v2.0.0'))} 系统生成，仅提供临床试验<strong>信息匹配</strong>，
             不构成医疗建议或治疗推荐。所有入组资格需由临床研究团队最终审核确认。
             报告中"feasibility"和"vs SoC"是基于公开协议入排标准 + 公开发表数据的形式比对，
             不代表对治疗效果或风险的临床判断。
         </p>
         <div style="font-size:11px; color:var(--muted); border-top:1px solid var(--line); padding-top:10px">
-            校验摘要: {sum(1 for t in gated_data.get('match',[])+gated_data.get('conditional',[]) if t.get('verification',{}).get('overall_status')=='RECRUITING')} 个 NCT ID 经 ClinicalTrials.gov v2 API 验证为 RECRUITING 状态。
+            校验摘要: {sum(1 for t in gated_data.get('match',[])+gated_data.get('conditional',[]) if _verification(t).get('overall_status')=='RECRUITING')} 个 NCT ID 经 ClinicalTrials.gov v2 API 验证为 RECRUITING 状态（ChiCTR 试验在中国注册中心人工核验，不计入此摘要）。
             决策路径数: {len(paths)}; Match 池: {len(gated_data.get('match',[]))}; Conditional: {len(gated_data.get('conditional',[]))}; Exclude: {len(gated_data.get('exclude',[]))}.
             一致性标记: {len(consistency)} 项 (患者画像内在张力).
             治疗目标讨论: {'已触发' if goc.get('triggered') else '未触发'}.
@@ -518,7 +625,7 @@ def render_html(report: dict, gated_data: dict, patient: dict, output_path: str)
     </section>
 
     <div class="footer">
-        生成于 {report.get('generated_at','?')} · 工具: clinical-trial-matching-skill v1.6.0 (CancerDAO/TrialGPT fork)
+        生成于 {report.get('generated_at','?')} · 工具: clinical-trial-matching-skill {_safe(report.get('report_version','v2.0.0'))} (CancerDAO/TrialGPT fork)
     </div>
 </div>
 </body>

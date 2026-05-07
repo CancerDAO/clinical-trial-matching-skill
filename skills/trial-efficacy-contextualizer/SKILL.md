@@ -146,6 +146,19 @@ The repo previously shipped per-cancer SoC reference files (`soc-crc-by-line.md`
 
 - [Output schema](rules/output-efficacy-context-schema.md)
 
+**Batch aggregate (REQUIRED top-level shape — matches trial-gater, trial-risk-annotator):**
+
+```json
+{
+  "results": [
+    { "trial_id": "NCT06459180", "efficacy_snapshot": {...}, "vs_soc": {...} },
+    { "trial_id": "ChiCTR2600120786", "efficacy_snapshot": {...}, "vs_soc": {...} }
+  ]
+}
+```
+
+Use `"results"` as the top-level key. Do not invent aliases like `"trials"`, `"items"`, or `"efficacy_results"` — the parent skill's aggregator looks for `results` first. Optional sibling fields (e.g. `soc_anchor_LACC_1L`, `patient_context_summary`) are allowed alongside `results` but the per-trial array MUST live under `results`.
+
 ## Mandatory grounding
 
 Before emitting any efficacy number, verify:

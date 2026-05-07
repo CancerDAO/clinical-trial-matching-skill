@@ -42,7 +42,7 @@ CT_GOV_API = "https://clinicaltrials.gov/api/v2/studies"
 
 def _fetch_one(nct_id: str, timeout: int = 15) -> dict:
     url = f"{CT_GOV_API}/{nct_id}"
-    req = urllib.request.Request(url, headers={"User-Agent": "TrialGPT-v1.6.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "clinical-trial-matching/v2.0.0 (CancerDAO; TrialGPT fork)"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read())
 
@@ -210,15 +210,38 @@ def verify_one(trial: dict, patient: dict | None = None) -> dict:
 
 def verify_batch(trials: list[dict], patient: dict | None = None,
                   max_workers: int = 6) -> list[dict]:
-    """Parallel verification with thread pool."""
+    """Parallel verification with thread pool.
+
+    NCT trials are verified live against the CT.gov v2 API.
+    ChiCTR (and any non-NCT) trials get a `skipped` verification stub written
+    back so downstream consumers (renderer, feasibility scoring) can rely on
+    `trial['verification']` always being a dict — never None.
+    """
+    fetched_at = dt.datetime.utcnow().isoformat() + "Z"
+    nct_trials = [t for t in trials if t.get("id", "").startswith("NCT")]
+    non_nct_trials = [t for t in trials if not t.get("id", "").startswith("NCT")]
+
+    # Write skipped stub for ChiCTR / unknown sources up-front
+    for t in non_nct_trials:
+        tid = t.get("id", "")
+        source = "ChiCTR" if tid.startswith("ChiCTR") else "non-NCT"
+        t["verification"] = {
+            "status": "skipped",
+            "reason": f"{source} trial — NCT-API verification not applicable",
+            "overall_status": t.get("recruitment_status") or "unknown",
+            "last_update_date": t.get("last_update_date", ""),
+            "title_official": t.get("title", ""),
+            "fetched_at": fetched_at,
+        }
+
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futures = {ex.submit(verify_one, t, patient): t for t in trials if t.get("id", "").startswith("NCT")}
+        futures = {ex.submit(verify_one, t, patient): t for t in nct_trials}
         for fut in as_completed(futures):
             t = futures[fut]
             try:
                 t["verification"] = fut.result()
             except Exception as e:
-                t["verification"] = {"status": "error", "error": str(e)}
+                t["verification"] = {"status": "error", "error": str(e), "fetched_at": fetched_at}
     return trials
 
 
