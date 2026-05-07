@@ -149,3 +149,26 @@ The `html_renderer.py` script reads this JSON and fills `template.html`. Rendere
 - `path.estimated_timeline` → "时间表" block
 
 If renderer breaks on a v2 report, check the JSON against this schema first.
+
+### Field-name normalization (v2.0.1)
+
+The renderer accepts both the canonical schema names AND legacy v1.7-era aliases for these fields, in this priority order:
+
+| Renderer reads | Canonical (v2 schema, preferred) | Legacy alias (v1.7, accepted) |
+|---|---|---|
+| Path role/style | `role` | `path_type` |
+| Per-path rationale | `rationale` | `rationale_one_liner` |
+| Per-path feasibility | flat `feasibility_score` + `feasibility_dims` | nested `feasibility: {composite, sub_scores}` |
+| Per-path blockers | flat `blockers_satisfied` + `blockers_pending` | nested `blockers_status: {satisfied, pending}` |
+| Per-path timeline | `estimated_timeline` (with `earliest_first_dose`, `critical_path_steps[]`) | `timeline` (with `expected_first_dose`, `critical_path` string) |
+| Alternatives entry | `{trial_id, trial_title, reason_not_chosen}` | `{alternative_id, alternative_title, why_picked_won[]}` |
+| Consistency flag | `{flag, severity, evidence}` | `{title, severity, detail}` |
+| Risk narrative | `risks[].narrative[]` | `risks[].notes[]` |
+| Trial null trial_id | OK — renderer renders "无关联试验" placeholder for paths like "continue current SoC" | — |
+| Verification on ChiCTR | nct_verifier writes `{status: "skipped", overall_status: ...}` stub on every non-NCT trial | — |
+
+**Going forward**: emit canonical names. The legacy fallbacks exist purely to keep existing reports renderable; new synthesizer code should not rely on them.
+
+### `consistency_flags[].severity` allowed values
+
+`info` | `warn` | `warning` | `danger` | `alert` | `critical`. Any of `danger`/`alert`/`critical` renders red; `warn`/`warning` renders amber; `info` renders blue. The synthesizer SHOULD prefer `info`/`warn`/`danger`; the others are accepted aliases.

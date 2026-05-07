@@ -59,6 +59,8 @@ For each trial, emit a JSON object per `rules/output-gating-verdict-schema.md`. 
 }
 ```
 
+**Use `"results"` as the top-level key — REQUIRED.** Do not use aliases like `"verdicts"`, `"trials"`, or `"items"`. The parent skill's aggregator reads `results` first; if it's missing, it falls back to `annotations`/`trials` for backward compatibility, but new outputs must use `results`. This rule is uniform across trial-gater, trial-risk-annotator, trial-efficacy-contextualizer.
+
 ## Process (per trial)
 
 ```
